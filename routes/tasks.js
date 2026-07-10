@@ -2,7 +2,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query, queryOne, run } = require('../database');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireTaskAccess } = require('../middleware/auth');
 const router = express.Router();
 
 function enrichTask(task) {
@@ -80,31 +80,34 @@ router.post('/', authenticate, (req, res) => {
 });
 
 // Get task by id
-router.get('/:id', authenticate, (req, res) => {
+router.get('/:id', authenticate, requireTaskAccess, (req, res) => {
   try {
-    const task = queryOne('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    res.json(enrichTask(task));
+    res.json(enrichTask(req.task));
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch task' });
   }
 });
 
 // Update task
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, requireTaskAccess, (req, res) => {
   try {
-    const task = queryOne('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const task = req.task;
     const { title, description, status, priority, assigned_to, due_date, estimated_hours, actual_hours, tags } = req.body;
 
     const newStatus = status || task.status;
-    const completedAt = newStatus === 'completed' && task.status !== 'completed' ? 'datetime("now")' : (task.completed_at ? `"${task.completed_at}"` : 'NULL');
+    // Parameterized instead of string-interpolated — the previous version
+    // built this fragment with template literals, which is an easy pattern
+    // to accidentally copy into a spot where the value IS user-controlled.
+    const completedAt = newStatus === 'completed' && task.status !== 'completed'
+      ? new Date().toISOString()
+      : (task.completed_at || null);
 
-    run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, assigned_to=?, due_date=?, estimated_hours=?, actual_hours=?, tags=?, updated_at=datetime("now"), completed_at=${completedAt} WHERE id=?`,
+    run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, assigned_to=?, due_date=?, estimated_hours=?, actual_hours=?, tags=?, updated_at=datetime("now"), completed_at=? WHERE id=?`,
       [title || task.title, description ?? task.description, newStatus,
        priority || task.priority, assigned_to ?? task.assigned_to,
        due_date ?? task.due_date, estimated_hours ?? task.estimated_hours,
-       actual_hours ?? task.actual_hours, tags ? JSON.stringify(tags) : task.tags, req.params.id]);
+       actual_hours ?? task.actual_hours, tags ? JSON.stringify(tags) : task.tags,
+       completedAt, req.params.id]);
 
     // Activity log for status change
     if (status && status !== task.status) {
@@ -136,7 +139,7 @@ router.delete('/:id', authenticate, (req, res) => {
 });
 
 // Comments
-router.get('/:id/comments', authenticate, (req, res) => {
+router.get('/:id/comments', authenticate, requireTaskAccess, (req, res) => {
   try {
     const comments = query(`
       SELECT c.*, u.name as user_name, u.avatar_color
@@ -148,7 +151,7 @@ router.get('/:id/comments', authenticate, (req, res) => {
   }
 });
 
-router.post('/:id/comments', authenticate, (req, res) => {
+router.post('/:id/comments', authenticate, requireTaskAccess, (req, res) => {
   try {
     const { content } = req.body;
     if (!content) return res.status(400).json({ error: 'Content required' });

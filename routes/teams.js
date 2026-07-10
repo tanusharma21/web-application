@@ -2,7 +2,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query, queryOne, run } = require('../database');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireTeamMember, requireTeamAdmin } = require('../middleware/auth');
 const router = express.Router();
 
 function enrichTeam(team, userId) {
@@ -52,7 +52,7 @@ router.post('/', authenticate, (req, res) => {
 });
 
 // Get team by id
-router.get('/:id', authenticate, (req, res) => {
+router.get('/:id', authenticate, requireTeamMember, (req, res) => {
   try {
     const team = queryOne('SELECT * FROM teams WHERE id = ?', [req.params.id]);
     if (!team) return res.status(404).json({ error: 'Team not found' });
@@ -93,7 +93,7 @@ router.delete('/:id', authenticate, (req, res) => {
 });
 
 // Add member
-router.post('/:id/members', authenticate, (req, res) => {
+router.post('/:id/members', authenticate, requireTeamAdmin, (req, res) => {
   try {
     const { user_id, role } = req.body;
     if (!user_id) return res.status(400).json({ error: 'user_id required' });
@@ -111,7 +111,7 @@ router.post('/:id/members', authenticate, (req, res) => {
 });
 
 // Remove member
-router.delete('/:id/members/:userId', authenticate, (req, res) => {
+router.delete('/:id/members/:userId', authenticate, requireTeamAdmin, (req, res) => {
   try {
     run('DELETE FROM team_members WHERE team_id = ? AND user_id = ?', [req.params.id, req.params.userId]);
     res.json({ message: 'Member removed' });

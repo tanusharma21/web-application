@@ -2,7 +2,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query, queryOne, run } = require('../database');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireProjectMember, requireProjectAdmin } = require('../middleware/auth');
 const router = express.Router();
 
 function enrichProject(project) {
@@ -60,7 +60,7 @@ router.post('/', authenticate, (req, res) => {
 });
 
 // Get project by id
-router.get('/:id', authenticate, (req, res) => {
+router.get('/:id', authenticate, requireProjectMember, (req, res) => {
   try {
     const project = queryOne('SELECT * FROM projects WHERE id = ?', [req.params.id]);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -71,7 +71,7 @@ router.get('/:id', authenticate, (req, res) => {
 });
 
 // Update project
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, requireProjectMember, (req, res) => {
   try {
     const project = queryOne('SELECT * FROM projects WHERE id = ?', [req.params.id]);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -103,7 +103,7 @@ router.delete('/:id', authenticate, (req, res) => {
 });
 
 // Add member to project
-router.post('/:id/members', authenticate, (req, res) => {
+router.post('/:id/members', authenticate, requireProjectAdmin, (req, res) => {
   try {
     const { user_id, role } = req.body;
     if (!user_id) return res.status(400).json({ error: 'user_id required' });
@@ -119,7 +119,7 @@ router.post('/:id/members', authenticate, (req, res) => {
 });
 
 // Remove member
-router.delete('/:id/members/:userId', authenticate, (req, res) => {
+router.delete('/:id/members/:userId', authenticate, requireProjectAdmin, (req, res) => {
   try {
     run('DELETE FROM project_members WHERE project_id = ? AND user_id = ?', [req.params.id, req.params.userId]);
     res.json({ message: 'Member removed' });
@@ -129,7 +129,7 @@ router.delete('/:id/members/:userId', authenticate, (req, res) => {
 });
 
 // Get project tasks
-router.get('/:id/tasks', authenticate, (req, res) => {
+router.get('/:id/tasks', authenticate, requireProjectMember, (req, res) => {
   try {
     const tasks = query(`
       SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color,
