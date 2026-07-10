@@ -37,10 +37,18 @@ router.get('/stats', authenticate, (req, res) => {
 
     const totalUsers = isAdmin ? queryOne('SELECT COUNT(*) as count FROM users', []) : null;
 
-    const recentActivity = query(`
-      SELECT al.*, u.name as user_name, u.avatar_color
-      FROM activity_log al JOIN users u ON al.user_id = u.id
-      ORDER BY al.created_at DESC LIMIT 10`, []);
+    // Scope activity to the user's own actions unless they're an admin —
+    // previously this returned every user's activity across the whole app.
+    const recentActivity = isAdmin
+      ? query(`
+          SELECT al.*, u.name as user_name, u.avatar_color
+          FROM activity_log al JOIN users u ON al.user_id = u.id
+          ORDER BY al.created_at DESC LIMIT 10`, [])
+      : query(`
+          SELECT al.*, u.name as user_name, u.avatar_color
+          FROM activity_log al JOIN users u ON al.user_id = u.id
+          WHERE al.user_id = ?
+          ORDER BY al.created_at DESC LIMIT 10`, [uid]);
 
     // Task by priority breakdown
     const priorityStats = isAdmin
@@ -103,10 +111,17 @@ router.put('/notifications/read-all', authenticate, (req, res) => {
 // Activity feed
 router.get('/activity', authenticate, (req, res) => {
   try {
-    const activity = query(`
-      SELECT al.*, u.name as user_name, u.avatar_color
-      FROM activity_log al JOIN users u ON al.user_id = u.id
-      ORDER BY al.created_at DESC LIMIT 30`, []);
+    const isAdmin = req.user.role === 'admin';
+    const activity = isAdmin
+      ? query(`
+          SELECT al.*, u.name as user_name, u.avatar_color
+          FROM activity_log al JOIN users u ON al.user_id = u.id
+          ORDER BY al.created_at DESC LIMIT 30`, [])
+      : query(`
+          SELECT al.*, u.name as user_name, u.avatar_color
+          FROM activity_log al JOIN users u ON al.user_id = u.id
+          WHERE al.user_id = ?
+          ORDER BY al.created_at DESC LIMIT 30`, [req.user.id]);
     res.json(activity);
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch activity' });
@@ -119,11 +134,38 @@ router.get('/search', authenticate, (req, res) => {
     const { q } = req.query;
     if (!q || q.length < 2) return res.json({ tasks: [], projects: [], teams: [] });
     const like = `%${q}%`;
-    const tasks = query(`SELECT id, title, status, priority FROM tasks WHERE title LIKE ? LIMIT 5`, [like]);
-    const projects = query(`SELECT id, name, status, color FROM projects WHERE name LIKE ? LIMIT 5`, [like]);
-    const teams = query(`SELECT id, name, color FROM teams WHERE name LIKE ? LIMIT 5`, [like]);
+    const isAdmin = req.user.role === 'admin';
+    const uid = req.user.id;
+
+    // Scoped to what the user can actually see — previously this searched
+    // every task/project/team in the database regardless of membership.
+    const tasks = isAdmin
+      ? query(`SELECT id, title, status, priority FROM tasks WHERE title LIKE ? LIMIT 5`, [like])
+      : query(`
+          SELECT DISTINCT t.id, t.title, t.status, t.priority FROM tasks t
+          LEFT JOIN project_members pm ON t.project_id = pm.project_id
+          WHERE t.title LIKE ? AND (t.assigned_to = ? OR t.created_by = ? OR pm.user_id = ?)
+          LIMIT 5`, [like, uid, uid, uid]);
+
+    const projects = isAdmin
+      ? query(`SELECT id, name, status, color FROM projects WHERE name LIKE ? LIMIT 5`, [like])
+      : query(`
+          SELECT DISTINCT p.id, p.name, p.status, p.color FROM projects p
+          JOIN project_members pm ON p.id = pm.project_id
+          WHERE p.name LIKE ? AND pm.user_id = ?
+          LIMIT 5`, [like, uid]);
+
+    const teams = isAdmin
+      ? query(`SELECT id, name, color FROM teams WHERE name LIKE ? LIMIT 5`, [like])
+      : query(`
+          SELECT DISTINCT tm2.id, tm2.name, tm2.color FROM teams tm2
+          JOIN team_members tmem ON tm2.id = tmem.team_id
+          WHERE tm2.name LIKE ? AND tmem.user_id = ?
+          LIMIT 5`, [like, uid]);
+
     res.json({ tasks, projects, teams });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: 'Search failed' });
   }
 });
